@@ -3,7 +3,10 @@ import type { BetaMessageParam as MessageParam } from '@anthropic-ai/sdk/resourc
 // @aws-sdk/client-bedrock-runtime is imported dynamically in countTokensWithBedrock()
 // to defer ~279KB of AWS SDK code until a Bedrock call is actually made
 import type { CountTokensCommandInput } from '@aws-sdk/client-bedrock-runtime'
-import { getAPIProvider } from 'src/utils/model/providers.js'
+import {
+  getAPIProvider,
+  shouldUseBetaEndpoints,
+} from 'src/utils/model/providers.js'
 import { VERTEX_COUNT_TOKENS_ALLOWED_BETAS } from '../constants/betas.js'
 import type { Attachment } from '../utils/attachments.js'
 import { getModelBetas } from '../utils/betas.js'
@@ -169,22 +172,27 @@ export async function countMessagesTokensWithAPI(
           ? betas.filter(b => VERTEX_COUNT_TOKENS_ALLOWED_BETAS.has(b))
           : betas
 
-      const response = await anthropic.beta.messages.countTokens({
+      const countTokensParams = {
         model: normalizeModelStringForAPI(model),
         messages:
           // When we pass tools and no messages, we need to pass a dummy message
           // to get an accurate tool token count.
-          messages.length > 0 ? messages : [{ role: 'user', content: 'foo' }],
+          messages.length > 0
+            ? messages
+            : ([{ role: 'user' as const, content: 'foo' }] as MessageParam[]),
         tools,
         ...(filteredBetas.length > 0 && { betas: filteredBetas }),
         // Enable thinking if messages contain thinking blocks
         ...(containsThinking && {
           thinking: {
-            type: 'enabled',
+            type: 'enabled' as const,
             budget_tokens: TOKEN_COUNT_THINKING_BUDGET,
           },
         }),
-      })
+      }
+      const response = shouldUseBetaEndpoints()
+        ? await anthropic.beta.messages.countTokens(countTokensParams)
+        : await (anthropic.messages.countTokens as any)(countTokensParams)
 
       if (typeof response.input_tokens !== 'number') {
         // Vertex client throws
@@ -299,7 +307,7 @@ export async function countTokensViaHaikuFallback(
       : betas
 
   // biome-ignore lint/plugin: token counting needs specialized parameters (thinking, betas) that sideQuery doesn't support
-  const response = await anthropic.beta.messages.create({
+  const requestParams = {
     model: normalizeModelStringForAPI(model),
     max_tokens: containsThinking ? TOKEN_COUNT_MAX_TOKENS : 1,
     messages: messagesToSend,
@@ -310,11 +318,14 @@ export async function countTokensViaHaikuFallback(
     // Enable thinking if messages contain thinking blocks
     ...(containsThinking && {
       thinking: {
-        type: 'enabled',
+        type: 'enabled' as const,
         budget_tokens: TOKEN_COUNT_THINKING_BUDGET,
       },
     }),
-  })
+  }
+  const response = shouldUseBetaEndpoints()
+    ? await anthropic.beta.messages.create(requestParams)
+    : await (anthropic.messages.create as any)(requestParams)
 
   const usage = response.usage
   const inputTokens = usage.input_tokens

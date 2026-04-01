@@ -23,6 +23,7 @@ import { randomUUID } from 'crypto'
 import {
   getAPIProvider,
   isFirstPartyAnthropicBaseUrl,
+  shouldUseBetaEndpoints,
 } from 'src/utils/model/providers.js'
 import {
   getAttributionHeader,
@@ -453,7 +454,7 @@ function configureEffortParams(
     betas.push(EFFORT_BETA_HEADER)
   } else if (typeof effortValue === 'string') {
     // Send string effort level as is
-    outputConfig.effort = effortValue as "high" | "medium" | "low" | "max"
+    outputConfig.effort = effortValue as 'high' | 'medium' | 'low' | 'max'
     betas.push(EFFORT_BETA_HEADER)
   } else if (process.env.USER_TYPE === 'ant') {
     // Numeric effort override - ant-only (uses anthropic_internal)
@@ -551,17 +552,33 @@ export async function verifyApiKey(
             source: 'verify_api_key',
           }),
         async anthropic => {
-          const messages: MessageParam[] = [{ role: 'user', content: 'test' }]
           // biome-ignore lint/plugin: API key verification is intentionally a minimal direct call
-          await anthropic.beta.messages.create({
-            model,
-            max_tokens: 1,
-            messages,
-            temperature: 1,
-            ...(betas.length > 0 && { betas }),
-            metadata: getAPIMetadata(),
-            ...getExtraBodyParams(),
-          })
+          if (shouldUseBetaEndpoints()) {
+            const messages: MessageParam[] = [{ role: 'user', content: 'test' }]
+            await anthropic.beta.messages.create({
+              model,
+              max_tokens: 1,
+              messages,
+              temperature: 1,
+              ...(betas.length > 0 && { betas }),
+              metadata: getAPIMetadata(),
+              ...getExtraBodyParams(),
+            })
+          } else {
+            // For third-party APIs, use non-beta endpoint (no ?beta=true query param)
+            type SimpleMessage = { role: 'user'; content: string }
+            const messages: SimpleMessage[] = [
+              { role: 'user', content: 'test' },
+            ]
+            await (anthropic.messages.create as any)({
+              model,
+              max_tokens: 1,
+              messages,
+              temperature: 1,
+              metadata: getAPIMetadata(),
+              ...getExtraBodyParams(),
+            })
+          }
           return true
         },
         { maxRetries: 2, model, thinkingConfig: { type: 'disabled' } }, // Use fewer retries for API key verification
@@ -735,7 +752,7 @@ export async function queryModelWithoutStreaming({
       options,
     )
   })) {
-    if (message.type === 'assistant') {
+    if (message && message.type === 'assistant') {
       assistantMessage = message as AssistantMessage
     }
   }
@@ -862,16 +879,22 @@ export async function* executeNonStreamingRequest(
 
       try {
         // biome-ignore lint/plugin: non-streaming API call
-        return await anthropic.beta.messages.create(
-          {
-            ...adjustedParams,
-            model: normalizeModelStringForAPI(adjustedParams.model),
-          },
-          {
+        const normalizedParams = {
+          ...adjustedParams,
+          model: normalizeModelStringForAPI(adjustedParams.model),
+        }
+        if (shouldUseBetaEndpoints()) {
+          return await anthropic.beta.messages.create(normalizedParams, {
             signal: retryOptions.signal,
             timeout: fallbackTimeoutMs,
-          },
-        )
+          })
+        } else {
+          // For third-party APIs, use non-beta endpoint (no ?beta=true query param)
+          return await (anthropic.messages.create as any)(normalizedParams, {
+            signal: retryOptions.signal,
+            timeout: fallbackTimeoutMs,
+          })
+        }
       } catch (err) {
         // User aborts are not errors — re-throw immediately without logging
         if (err instanceof APIUserAbortError) throw err
@@ -909,7 +932,7 @@ export async function* executeNonStreamingRequest(
   let e
   do {
     e = await generator.next()
-    if (!e.done && e.value.type === 'system') {
+    if (!e.done && e.value && e.value.type === 'system') {
       yield e.value
     }
   } while (!e.done)
@@ -1507,11 +1530,11 @@ async function* queryModel(
   let start = Date.now()
   let attemptNumber = 0
   const attemptStartTimes: number[] = []
-  let stream: Stream<BetaRawMessageStreamEvent> | undefined = undefined
-  let streamRequestId: string | null | undefined = undefined
-  let clientRequestId: string | undefined = undefined
+  let stream: Stream<BetaRawMessageStreamEvent> | undefined
+  let streamRequestId: string | null | undefined
+  let clientRequestId: string | undefined
   // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins -- Response is available in Node 18+ and is used by the SDK
-  let streamResponse: Response | undefined = undefined
+  let streamResponse: Response | undefined
 
   // Release all stream resources to prevent native memory leaks.
   // The Response object holds native TLS/socket buffers that live outside the
@@ -1597,7 +1620,7 @@ async function* queryModel(
     const hasThinking =
       thinkingConfig.type !== 'disabled' &&
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
-    let thinking: BetaMessageStreamParams['thinking'] | undefined = undefined
+    let thinking: BetaMessageStreamParams['thinking'] | undefined
 
     // IMPORTANT: Do not change the adaptive-vs-budget thinking selection below
     // without notifying the model launch DRI and research. This is a sensitive
@@ -1761,7 +1784,7 @@ async function* queryModel(
 
   const newMessages: AssistantMessage[] = []
   let ttftMs = 0
-  let partialMessage: BetaMessage | undefined = undefined
+  let partialMessage: BetaMessage | undefined
   const contentBlocks: (BetaContentBlock | ConnectorTextBlock)[] = []
   let usage: NonNullableUsage = EMPTY_USAGE
   let costUSD = 0
@@ -1769,8 +1792,8 @@ async function* queryModel(
   let didFallBackToNonStreaming = false
   let fallbackMessage: AssistantMessage | undefined
   let maxOutputTokens = 0
-  let responseHeaders: globalThis.Headers | undefined = undefined
-  let research: unknown = undefined
+  let responseHeaders: globalThis.Headers | undefined
+  let research: unknown
   let isFastModeRequest = isFastMode // Keep separate state as it may change if falling back
   let isAdvisorInProgress = false
 
@@ -1820,17 +1843,21 @@ async function* queryModel(
         // BetaMessageStream calls partialParse() on every input_json_delta, which we don't need
         // since we handle tool input accumulation ourselves
         // biome-ignore lint/plugin: main conversation loop handles attribution separately
-        const result = await anthropic.beta.messages
-          .create(
-            { ...params, stream: true },
-            {
-              signal,
-              ...(clientRequestId && {
-                headers: { [CLIENT_REQUEST_ID_HEADER]: clientRequestId },
-              }),
-            },
-          )
-          .withResponse()
+        const streamParams = { ...params, stream: true }
+        const requestOptions = {
+          signal,
+          ...(clientRequestId && {
+            headers: { [CLIENT_REQUEST_ID_HEADER]: clientRequestId },
+          }),
+        }
+        const result = shouldUseBetaEndpoints()
+          ? await anthropic.beta.messages
+              .create(streamParams, requestOptions)
+              .withResponse()
+          : await (anthropic.messages.create as any)(
+              streamParams,
+              requestOptions,
+            ).withResponse()
         queryCheckpoint('query_response_headers_received')
         streamRequestId = result.request_id
         streamResponse = result.response
@@ -1851,7 +1878,13 @@ async function* queryModel(
       e = await generator.next()
 
       // yield API error messages (the stream has a 'controller' property, error messages don't)
-      if (!('controller' in e.value)) {
+      // Skip yielding if the generator is done (e.value may be undefined)
+      if (
+        !e.done &&
+        (e.value == null ||
+          typeof e.value !== 'object' ||
+          !('controller' in e.value))
+      ) {
         yield e.value
       }
     } while (!e.done)
@@ -2079,7 +2112,8 @@ async function* queryModel(
                 })
                 throw new Error('Content block is not a connector_text block')
               }
-              ;(contentBlock as { connector_text: string }).connector_text += delta.connector_text
+              ;(contentBlock as { connector_text: string }).connector_text +=
+                delta.connector_text
             } else {
               switch (delta.type) {
                 case 'citations_delta':
@@ -2158,7 +2192,8 @@ async function* queryModel(
                     })
                     throw new Error('Content block is not a thinking block')
                   }
-                  ;(contentBlock as { thinking: string }).thinking += delta.thinking
+                  ;(contentBlock as { thinking: string }).thinking +=
+                    delta.thinking
                   break
               }
             }
@@ -2249,7 +2284,10 @@ async function* queryModel(
             }
 
             // Update cost
-            const costUSDForPart = calculateUSDCost(resolvedModel, usage as unknown as BetaUsage)
+            const costUSDForPart = calculateUSDCost(
+              resolvedModel,
+              usage as unknown as BetaUsage,
+            )
             costUSD += addToTotalSessionCost(
               costUSDForPart,
               usage as unknown as BetaUsage,
@@ -2819,10 +2857,14 @@ async function* queryModel(
     // message_delta handler before any yield. Fallback pushes to newMessages
     // then yields, so tracking must be here to survive .return() at the yield.
     if (fallbackMessage) {
-      const fallbackUsage = fallbackMessage.message.usage as BetaMessageDeltaUsage
+      const fallbackUsage = fallbackMessage.message
+        .usage as BetaMessageDeltaUsage
       usage = updateUsage(EMPTY_USAGE, fallbackUsage)
       stopReason = fallbackMessage.message.stop_reason as BetaStopReason
-      const fallbackCost = calculateUSDCost(resolvedModel, fallbackUsage as unknown as BetaUsage)
+      const fallbackCost = calculateUSDCost(
+        resolvedModel,
+        fallbackUsage as unknown as BetaUsage,
+      )
       costUSD += addToTotalSessionCost(
         fallbackCost,
         fallbackUsage as unknown as BetaUsage,
@@ -2858,7 +2900,9 @@ async function* queryModel(
   void options.getToolPermissionContext().then(permissionContext => {
     logAPISuccessAndDuration({
       model:
-        (newMessages[0]?.message.model as string | undefined) ?? partialMessage?.model ?? options.model,
+        (newMessages[0]?.message.model as string | undefined) ??
+        partialMessage?.model ??
+        options.model,
       preNormalizedModel: options.model,
       usage,
       start,

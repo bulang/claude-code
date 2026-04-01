@@ -38,3 +38,19 @@ export function isFirstPartyAnthropicBaseUrl(): boolean {
     return false
   }
 }
+
+/**
+ * Check if we should use beta endpoints.
+ * Returns false for third-party API providers that don't support ?beta=true query param.
+ */
+export function shouldUseBetaEndpoints(): boolean {
+  // If using Bedrock, Vertex, or Foundry, they have their own SDK wrappers
+  if (getAPIProvider() !== 'firstParty') {
+    return false
+  }
+  // If using a custom base URL that's not official Anthropic API, skip beta
+  if (!isFirstPartyAnthropicBaseUrl()) {
+    return false
+  }
+  return true
+}

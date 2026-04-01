@@ -17,6 +17,7 @@ import { getAnthropicClient } from '../services/api/client.js'
 import { getModelBetas, modelSupportsStructuredOutputs } from './betas.js'
 import { computeFingerprint } from './fingerprint.js'
 import { normalizeModelStringForAPI } from './model/model.js'
+import { shouldUseBetaEndpoints } from './model/providers.js'
 
 type MessageParam = Anthropic.MessageParam
 type TextBlockParam = Anthropic.TextBlockParam
@@ -179,23 +180,23 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   const normalizedModel = normalizeModelStringForAPI(model)
   const start = Date.now()
   // biome-ignore lint/plugin: this IS the wrapper that handles OAuth attribution
-  const response = await client.beta.messages.create(
-    {
-      model: normalizedModel,
-      max_tokens,
-      system: systemBlocks,
-      messages,
-      ...(tools && { tools }),
-      ...(tool_choice && { tool_choice }),
-      ...(output_format && { output_config: { format: output_format } }),
-      ...(temperature !== undefined && { temperature }),
-      ...(stop_sequences && { stop_sequences }),
-      ...(thinkingConfig && { thinking: thinkingConfig }),
-      ...(betas.length > 0 && { betas }),
-      metadata: getAPIMetadata(),
-    },
-    { signal },
-  )
+  const requestParams = {
+    model: normalizedModel,
+    max_tokens,
+    system: systemBlocks,
+    messages,
+    ...(tools && { tools }),
+    ...(tool_choice && { tool_choice }),
+    ...(output_format && { output_config: { format: output_format } }),
+    ...(temperature !== undefined && { temperature }),
+    ...(stop_sequences && { stop_sequences }),
+    ...(thinkingConfig && { thinking: thinkingConfig }),
+    ...(betas.length > 0 && { betas }),
+    metadata: getAPIMetadata(),
+  }
+  const response = shouldUseBetaEndpoints()
+    ? await client.beta.messages.create(requestParams, { signal })
+    : await (client.messages.create as any)(requestParams, { signal })
 
   const requestId =
     (response as { _request_id?: string | null })._request_id ?? undefined

@@ -1,0 +1,134 @@
+/* CSS Variables for Theme System */
+:root {
+  /* Light theme */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #e8e8e8;
+  --bg-hover: #e0e0e0;
+  --bg-active: #e3f2fd;
+
+  --text-primary: #1a1a1a;
+  --text-secondary: #666666;
+  --text-muted: #999999;
+
+  --border-color: #e0e0e0;
+  --accent-color: #42b883;
+  --accent-hover: #3aa876;
+
+  --error-color: #dc4446;
+  --warning-color: #f5a623;
+}
+
+[data-theme="dark"] {
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252526;
+  --bg-tertiary: #333333;
+  --bg-hover: #3c3c3c;
+  --bg-active: #094771;
+
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+  --text-muted: #666666;
+
+  --border-color: #3e3e3e;
+  --accent-color: #42b883;
+  --accent-hover: #3aa876;
+
+  --error-color: #f48771;
+  --warning-color: #f5a623;
+}
+
+/* Base styles */
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+#app {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Splitpanes theme override */
+.splitpanes.default-theme .splitpanes__pane {
+  background: var(--bg-primary);
+}
+
+.splitpanes.default-theme .splitpanes__splitter {
+  background: var(--border-color);
+  border: none;
+}
+
+.splitpanes.default-theme .splitpanes__splitter:before,
+.splitpanes.default-theme .splitpanes__splitter:after {
+  background: var(--accent-color);
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Utility classes */
+.flex {
+  display: flex;
+}
+
+.flex-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.gap-2 {
+  gap: 8px;
+}
+
+.gap-4 {
+  gap: 16px;
+}
+
+.p-4 {
+  padding: 16px;
+}
+
+.m-4 {
+  margin: 16px;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.h-full {
+  height: 100%;
+}
